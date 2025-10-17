@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.log
+
+# Virtual env
+.venv/
+venv/
+
+# Secrets
+.env
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Local data / outputs
+db/
+data/
+output/
+*.sqlite
+*.db
+
+# OS
+.DS_Store
+Thumbs.db
