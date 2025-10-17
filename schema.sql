@@ -1,35 +1,27 @@
-CREATE TABLE IF NOT EXISTS chunks (
-                                      chunk_id   TEXT PRIMARY KEY,
-                                      book_id    TEXT,
-                                      chapter    TEXT,
-                                      start_pos  INTEGER,
-                                      end_pos    INTEGER,
-                                      text       TEXT
+-- ========== 剧情节点表 ==========
+CREATE TABLE IF NOT EXISTS plot_nodes (
+                                          id            TEXT PRIMARY KEY,
+                                          title         TEXT NOT NULL,
+                                          summary       TEXT NOT NULL,
+                                          entry_hint    TEXT,
+                                          exit_hint     TEXT,
+                                          fact_tags     TEXT,
+                                          required_flags TEXT,
+                                          set_flags     TEXT
 );
 
-CREATE TABLE IF NOT EXISTS entities (
-                                        entity_id  TEXT PRIMARY KEY,
-                                        type       TEXT,
-                                        name       TEXT,
-                                        aliases    TEXT,
-                                        meta       TEXT
-);
+-- ========== 剧情边表 ==========
+CREATE TABLE IF NOT EXISTS plot_edges (
+                                          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                                          src           TEXT NOT NULL,
+                                          dst           TEXT NOT NULL,
+                                          condition     TEXT,
+                                          keywords      TEXT,
+                                          UNIQUE(src, dst)
+    );
 
-CREATE TABLE IF NOT EXISTS facts (
-                                     fact_id     TEXT PRIMARY KEY,
-                                     subject     TEXT,
-                                     predicate   TEXT,
-                                     object      TEXT,
-                                     summary     TEXT,
-                                     evidence    TEXT
-);
-
-CREATE TABLE IF NOT EXISTS events (
-                                      event_id    TEXT PRIMARY KEY,
-                                      who         TEXT,
-                                      where_name  TEXT,
-                                      action      TEXT,
-                                      details     TEXT,
-                                      chapter     TEXT,
-                                      evidence    TEXT
+-- ========== 剧情状态表 ==========
+CREATE TABLE IF NOT EXISTS plot_state (
+                                          save_id       TEXT PRIMARY KEY DEFAULT 'default',
+                                          current_node  TEXT NOT NULL
 );
