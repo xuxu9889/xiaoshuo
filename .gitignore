@@ -1,29 +1,14 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-*.log
-
 # Virtual env
 .venv/
-venv/
-
-# Secrets
-.env
-
-# IDE
-.idea/
-.vscode/
+env/
 *.iml
 
-# Local data / outputs
-db/
-data/
-output/
-*.sqlite
-*.db
+# IDE files
+.idea/
+.vscode/
 
-# OS
-.DS_Store
-Thumbs.db
+# Local data
+data/
+db/
+input/
+SillyTavern-Launcher/

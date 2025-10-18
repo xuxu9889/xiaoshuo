@@ -1,5 +1,0 @@
-你是抽取器。只返回 JSON，不要多余文字。缺信息留空。
-输入是一段小说文本片段，请抽取“实体”：
-类型限定：person/org/place/item/skill
-返回：
-{"entities":[{"type":"person|org|place|item|skill","name":"...","aliases":["..."],"notes":"..."}]}
