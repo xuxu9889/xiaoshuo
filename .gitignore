@@ -1,14 +1,23 @@
-# Virtual env
+# Python 虚拟环境
 .venv/
 env/
-*.iml
 
-# IDE files
+# IDE 配置
 .idea/
 .vscode/
+*.iml
 
-# Local data
+# 本地数据、数据库、输入文件
 data/
 db/
 input/
+
+# 外部工具目录（如 SillyTavern-Launcher）
 SillyTavern-Launcher/
+
+# 配置文件 & 密钥
+.env
+
+# 索引和嵌入数据库
+index/
+*.sqlite3
