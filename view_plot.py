@@ -1,7 +1,7 @@
 # view_plot.py
 import sqlite3, os
 
-DB_PATH = os.getenv("DB_PATH", "./db/canon.sqlite")
+DB_PATH = os.getenv("DB_PATH", "./db/盗墓笔记.sqlite")
 
 def main():
     conn = sqlite3.connect(DB_PATH)

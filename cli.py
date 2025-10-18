@@ -1,11 +1,18 @@
-# cli.py
+# -*- coding: utf-8 -*-
+"""
+Xiaoshuo CLI
+- 初始化数据库（init-db）
+- 沉浸式互动（interactive） —— 兼容无 facts 表
+- 查看 数据：list-facts / list-nodes / list-edges —— 均支持 --db 指定数据库
+"""
+
 import os
-from pathlib import Path
-import sqlite3
 import re
+import sqlite3
+from pathlib import Path
 import typer
 
-app = typer.Typer(help="Xiaoshuo CLI - 初始化数据库 / 沉浸式互动（剧情表驱动）")
+app = typer.Typer(help="Xiaoshuo CLI - 初始化数据库 / 沉浸式互动 / 数据查看（剧情表+facts）")
 
 
 # =========================
@@ -23,6 +30,45 @@ def _exec_sql_file(db_path: str, sql_path: str):
     return True
 
 
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?;",
+        (name,)
+    ).fetchone()
+    return row is not None
+
+
+def _print_table(rows, headers):
+    """
+    简易对齐表格打印。rows: List[tuple/ list / dict], headers: List[str]
+    - 支持 dict 行（按 headers 取值）
+    """
+    # 统一为 list[list]
+    norm = []
+    for r in rows:
+        if isinstance(r, dict):
+            norm.append([str(r.get(h, "")) for h in headers])
+        else:
+            norm.append([("" if v is None else str(v)) for v in r])
+
+    widths = [len(h) for h in headers]
+    for row in norm:
+        for i, cell in enumerate(row):
+            if len(cell) > widths[i]:
+                widths[i] = len(cell)
+
+    def fmt_row(vals):
+        return "  ".join(v.ljust(widths[i]) for i, v in enumerate(vals))
+
+    # 头
+    print(fmt_row(headers))
+    print("  ".join("-" * widths[i] for i in range(len(headers))))
+    # 行
+    for row in norm:
+        print(fmt_row(row))
+
+
 # =========================
 # 命令：初始化数据库
 # =========================
@@ -30,7 +76,7 @@ def _exec_sql_file(db_path: str, sql_path: str):
 def init_db(
         schema: str = typer.Option("schema.sql", help="主 schema 文件（如存在则执行）"),
         plot_schema: str = typer.Option("schema_plot.sql", help="剧情表 schema 文件（如存在则执行）"),
-        db: str = typer.Option(None, help="数据库路径（优先于环境变量 DB_PATH）"),
+        db: str = typer.Option(None, "--db", help="数据库路径（优先于环境变量 DB_PATH）"),
 ):
     db_path = db or os.getenv("DB_PATH", "./db/canon.sqlite")
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -50,10 +96,11 @@ def init_db(
 
 
 # =========================
-# 角色选择（可选）
+# 角色选择（尽量通用）
 # =========================
+
 def build_person_candidates(facts_rows):
-    """基于 facts 粗略抽取可扮演人物清单。"""
+    """基于 facts 粗略抽取可扮演的“实体名”。没有 facts 时返回空。"""
     PERSON_HINTS = ("身份", "职业", "性格", "称号", "昵称", "关系", "阵营", "玩家", "NPC")
     blacklist = {"游戏", "系统", "新手村", "机甲志", "无敌游戏", "怪兽", "规则", "任务", "铜币"}
     persons = {}
@@ -61,10 +108,9 @@ def build_person_candidates(facts_rows):
         s = (s or "").strip()
         p = (p or "").strip()
         o = (o or "").strip()
-        if s in blacklist:
+        if not s or s in blacklist:
             continue
         if any(h in p for h in PERSON_HINTS):
-            # 修复 f-string 语法问题：先清洗字段，再填入 f-string
             clean_o = o.strip().strip('"').strip('“”')
             persons.setdefault(s, {
                 "name": s,
@@ -73,57 +119,39 @@ def build_person_candidates(facts_rows):
     return persons
 
 
-
 def choose_role_interactively(persons_dict):
-    """交互式角色选择界面。"""
-    person_list = sorted(persons_dict.values(), key=lambda d: d["name"])
+    """交互式角色选择。无 facts 时提供通用选项。"""
+    person_list = sorted(persons_dict.values(), key=lambda d: d["name"]) if persons_dict else []
 
-    def pick_existing_person():
-        if not person_list:
-            print("（未检测到现成人物条目）")
-            return None
-        print("\n可扮演人物（现有）：")
-        for i, p in enumerate(person_list, 1):
-            brief = p.get("identity", "") or "（暂无人设摘要）"
-            print(f"{i}）{p['name']} - {brief}")
-        sel = input("输入编号选择：").strip()
-        if not sel.isdigit():
-            return None
-        idx = int(sel)
-        if 1 <= idx <= len(person_list):
-            return person_list[idx - 1]
-        return None
-
-    print("\n=== 角色选择 ===")
-    print("1）主角：刘浪（若存在）")
-    print("2）剧情内现有人物（从数据库抓取）")
-    print("3）旁观者角色（叙事视角）")
-    print("4）自定义角色（输入人设）")
+    print("\n=== 角色选择（通用） ===")
+    print("1）旁观者（叙事视角）")
+    if person_list:
+        print("2）从抽取的实体中选择")
+    print("3）自定义角色（输入人设）")
 
     while True:
-        opt = input("请输入 1/2/3/4：").strip()
+        opt = input("请输入 1/2/3：").strip()
         if opt == "1":
-            for p in person_list:
-                if p["name"] == "刘浪":
-                    return {"name": "刘浪",
-                            "identity": p.get("identity", "主角"),
-                            "motive": "东山再起",
-                            "goal": "在《机甲志》中重夺荣光",
-                            "style": "果决锋利"}
-            print("⚠ 未找到“刘浪”，请改选 2/3/4")
-        elif opt == "2":
-            picked = pick_existing_person()
-            if picked:
-                return {
-                    "name": picked["name"],
-                    "identity": picked.get("identity", ""),
-                    "motive": "达成私欲/事业",
-                    "goal": "推进当前局势",
-                    "style": ""
-                }
+            return {"name": "旁观者", "identity": "叙事视角/记录者", "motive": "观察与推进", "goal": "记录关键节点", "style": "冷静克制"}
+        elif opt == "2" and person_list:
+            print("\n检测到可扮演的实体：")
+            for i, p in enumerate(person_list, 1):
+                brief = p.get("identity", "") or "（暂无人设摘要）"
+                print(f"{i}）{p['name']}  （从事实中自动抽取）")
+            sel = input("输入编号选择：").strip()
+            if sel.isdigit():
+                idx = int(sel)
+                if 1 <= idx <= len(person_list):
+                    picked = person_list[idx - 1]
+                    return {
+                        "name": picked["name"],
+                        "identity": picked.get("identity", ""),
+                        "motive": "达成私欲/事业",
+                        "goal": "推进当前局势",
+                        "style": ""
+                    }
+            print("无效选择，请重试。")
         elif opt == "3":
-            return {"name": "旁观者", "identity": "叙事视角/记录者", "motive": "观察并推动剧情", "goal": "记录关键节点", "style": "冷静克制"}
-        elif opt == "4":
             nm = input("角色名：").strip() or "无名者"
             idt = input("身份（一句话）：").strip()
             mtv = input("动机（一句话）：").strip()
@@ -139,28 +167,26 @@ def choose_role_interactively(persons_dict):
 # =========================
 @app.command("interactive")
 def interactive(
-        length: int = typer.Option(200, help="单段目标字数：200/500/1000")
+        length: int = typer.Option(200, help="单段目标字数：200/500/1000"),
+        db: str = typer.Option(None, "--db", help="数据库路径（默认读取环境变量 DB_PATH 或 ./db/canon.sqlite）"),
 ):
-    import sqlite3
     from state import GameState
     from engine import Engine
 
-    db_path = os.getenv("DB_PATH", "./db/canon.sqlite")
+    db_path = db or os.getenv("DB_PATH", "./db/canon.sqlite")
 
-    # ---------- 加载 facts ----------
+    # 加载 facts（可选）
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
-    rows = cur.execute("SELECT subject, predicate, object, summary FROM facts").fetchall()
+    facts_rows = []
+    if _table_exists(conn, "facts"):
+        try:
+            facts_rows = cur.execute("SELECT subject, predicate, object, summary FROM facts").fetchall()
+        except Exception:
+            facts_rows = []
 
-    # ---------- 构建检索器（优先向量检索；无 retrieval.py 时回退关键词检索） ----------
-    try:
-        from retrieval import build_fact_index, retrieve
-        index = build_fact_index(rows)
-
-        def select_facts(query, role_name, location_hint, k=12):
-            return retrieve(index, query, k=k, role_name=role_name, location_hint=location_hint)
-    except Exception:
-        # 回退：极简关键词检索
+    # 构建简单检索器（无 retrieval.py 时回退关键词检索）
+    def build_keyword_index(rows):
         facts = []
         for s, p, o, sm in rows:
             s = (s or "").strip()
@@ -168,21 +194,33 @@ def interactive(
             o = (o or "").strip().strip('"').strip("“”")
             sm = (sm or "").strip()
             facts.append({"s": s, "p": p, "o": o, "sm": sm, "full": f"{s} {p} {o} {sm}".lower()})
+        return facts
+
+    try:
+        from retrieval import build_fact_index, retrieve
+        index = build_fact_index(facts_rows)
 
         def select_facts(query, role_name, location_hint, k=12):
+            return retrieve(index, query, k=k, role_name=role_name, location_hint=location_hint)
+    except Exception:
+        facts_index = build_keyword_index(facts_rows)
+
+        def select_facts(query, role_name, location_hint, k=12):
+            if not facts_index:
+                return []
             q = (query or "").lower()
             scored = []
             terms = [t for t in re.split(r"\s+", q) if t]
-            for f in facts:
+            for f in facts_index:
                 score = sum(f["full"].count(t) for t in terms)
                 if role_name and role_name in f["s"]:
                     score += 2
                 if score > 0:
                     scored.append((score, f))
             scored.sort(key=lambda x: x[0], reverse=True)
-            return [f for _, f in scored[:k]] or facts[:k]
+            return [f for _, f in scored[:k]] or facts_index[:k]
 
-    # ---------- 加载剧情表 ----------
+    # 加载剧情表
     def load_plot(cnx):
         nodes = {r[0]: dict(id=r[0], title=r[1], summary=r[2], entry_hint=r[3],
                             exit_hint=r[4], fact_tags=r[5] or "", required_flags=r[6] or "",
@@ -192,15 +230,17 @@ def interactive(
         for src, dst, cond, kws in cnx.execute("SELECT src,dst,condition,keywords FROM plot_edges"):
             edges.setdefault(src, []).append(dict(dst=dst, condition=cond or "", keywords=kws or ""))
         current = GameState.get_current_node(db_path=db_path, save_id="default")
+        if current not in nodes and nodes:
+            current = list(nodes.keys())[0]
         return nodes, edges, current
 
     nodes, edges, current_node = load_plot(conn)
 
-    # ---------- 角色选择（一次性） ----------
-    persons = build_person_candidates(rows)
+    # 选角色
+    persons = build_person_candidates(facts_rows)
     role = choose_role_interactively(persons)
 
-    # ---------- 引擎与持久化状态 ----------
+    # 引擎 + 状态
     model = os.getenv("OPENAI_CHAT_MODEL", "gpt-4.1-mini")
     eng = Engine(system_prompt="", model=model)
     eng.set_length(length)
@@ -209,28 +249,27 @@ def interactive(
     state = GameState.load(db_path=db_path, save_id="default")
     state.role_name = eng.role.get("name", state.role_name)
 
-    print(f"\n=== 沉浸式小说（剧情表驱动） ===")
-    print(f"模型：{model} | 事实：{len(rows)} | 段长：{length} | 剧情节点：{current_node} | 角色：{state.role_name}")
-    print("命令：/len N｜/state｜/save｜/load｜/reset｜/roles（重开选角）｜/exit")
-    print("提示：输入行动/意图（如：进入新手村、领取武器、购买营养仓、练级到10级、转职）。")
+    print(f"\n=== 沉浸式小说（通用剧情表驱动） ===")
+    print(f"模型：{model} | facts：{len(facts_rows)} | 段长：{length} | 当前节点：{current_node} | 角色：{state.role_name}")
+    print("命令：/len N｜/state｜/save｜/load｜/reset｜/roles｜/list｜/next｜/goto ID｜/exit")
+    print("提示：任意自然语言输入用于叙述；含“下一段/继续/next/推进”可尝试沿边推进。")
 
-    # ---------- 剧情推进辅助 ----------
     def allowed_keywords_for(node_id: str):
         kws = []
         for e in edges.get(node_id, []):
             if e["keywords"]:
                 kws += [k.strip() for k in e["keywords"].split(",") if k.strip()]
+        # 去重保序
         return list(dict.fromkeys(kws))
 
     def next_node_if_any(node_id: str, user_text: str):
         t = (user_text or "").replace(" ", "")
         for e in edges.get(node_id, []):
             kws = [k.strip() for k in (e["keywords"] or "").split(",") if k.strip()]
-            if any(k and k in t for k in kws):
+            if any(k and k in t for k in kws) or t in {"next", "继续", "推进", "下一段"}:
                 return e["dst"]
         return None
 
-    # ---------- 主循环 ----------
     while True:
         try:
             user = input("你> ").strip()
@@ -238,9 +277,9 @@ def interactive(
             print("\n👋 再见！")
             break
 
-        # —— 系统命令 —— #
+        # 系统命令
         if user.lower() in {"exit", "/exit", "quit"}:
-            print("退出"); break
+            print("👋 再见！"); break
 
         if user.startswith("/len"):
             try:
@@ -265,19 +304,33 @@ def interactive(
 
         if user.startswith("/load"):
             state = GameState.load(db_path=db_path, save_id="default")
-            current_node = GameState.get_current_node(db_path=db_path, save_id="default")
+            # 读回当前节点
+            try:
+                from state import GameState as _GS
+                current_node = _GS.get_current_node(db_path=db_path, save_id="default")
+            except Exception:
+                pass
             print("已读档")
             continue
 
         if user.startswith("/reset"):
-            from engine import Engine as _E  # 重置引擎历史
+            from engine import Engine as _E
             eng = _E(system_prompt="", model=model)
             eng.set_length(length)
             eng.set_role(role)
             state = GameState(save_id="default", role_name=eng.role.get("name", "无名者"))
-            GameState.set_current_node("intro_room", db_path=db_path, save_id="default")
+            # 重置到首节点
+            if nodes:
+                first = sorted(nodes.keys())[0]
+            else:
+                first = "intro_room"
+            try:
+                from state import GameState as _GS
+                _GS.set_current_node(first, db_path=db_path, save_id="default")
+            except Exception:
+                pass
             nodes, edges, current_node = load_plot(conn)
-            print("会话+剧情节点已重置为 intro_room")
+            print(f"会话+剧情节点已重置为 {current_node}")
             continue
 
         if user.startswith("/roles"):
@@ -287,61 +340,214 @@ def interactive(
             print(f"已切换为：{state.role_name}")
             continue
 
-        # —— 行动解析（示例：购买营养仓） —— #
-        txt = user.replace(" ", "")
-        event_line = ""
-        if any(k in txt for k in ("购买营养仓", "买营养仓", "购入营养仓", "买个营养仓", "买下营养仓", "购置营养仓")):
-            price = 80
-            if state.has_item("营养仓"):
-                event_line = "（你已拥有『营养仓』，无需重复购买）"
-            elif state.spend(price):
-                state.add_item("营养仓")
-                state.set_flag("bought_nutri", True)
-                event_line = f"（交易完成：花费{price}，获得『营养仓』）"
+        if user.startswith("/list"):
+            if current_node in nodes:
+                print("\n可推进关键词：", "、".join(allowed_keywords_for(current_node)) or "（无）")
+                outs = edges.get(current_node, [])
+                if outs:
+                    print("出边：")
+                    for i, e in enumerate(outs, 1):
+                        print(f"{i}） {current_node} -> {e['dst']}  | 条件:{e['condition'] or '-'} | 关键词:{e['keywords'] or '-'}")
+                else:
+                    print("（当前节点没有出边）")
             else:
-                event_line = f"（资金不足：{state.coins}/{price}）"
+                print("（当前节点不存在于剧情表）")
+            continue
 
-        # —— 当前剧情阶段信息 —— #
+        if user.startswith("/next"):
+            dst = next_node_if_any(current_node, "next")
+            if dst and dst in nodes:
+                try:
+                    from state import GameState as _GS
+                    _GS.set_current_node(dst, db_path=db_path, save_id="default")
+                except Exception:
+                    pass
+                current_node = dst
+                print(f"→ 已推进到 {current_node}")
+            else:
+                print("没有匹配的出边可推进。")
+            continue
+
+        if user.startswith("/goto"):
+            parts = user.split(maxsplit=1)
+            if len(parts) == 2:
+                target = parts[1].strip()
+                if target in nodes:
+                    try:
+                        from state import GameState as _GS
+                        _GS.set_current_node(target, db_path=db_path, save_id="default")
+                    except Exception:
+                        pass
+                    current_node = target
+                    print(f"→ 跳转到 {current_node}")
+                else:
+                    print("目标节点不存在。")
+            else:
+                print("用法：/goto chXXX_YYY")
+            continue
+
+        # —— 常规叙述 —— #
         node = nodes.get(current_node, {})
         node_tags = (node.get("fact_tags", "") or "").split(",")
+
         stage_block = (
             f"【剧情阶段】{node.get('id', '?')}｜{node.get('title', '')}\n"
             f"阶段说明：{node.get('summary', '')}\n"
             f"进入提示：{node.get('entry_hint', '')}\n"
             f"推进提示：{node.get('exit_hint', '')}\n"
-            f"允许推进关键词：{ '、'.join(allowed_keywords_for(current_node)) or '（无）' }"
         )
 
-        # —— 检索（节点标签增强查询） —— #
         query = (user or "") + " " + " ".join(node_tags)
         selected = select_facts(query, role_name=eng.role.get("name", ""), location_hint=state.location, k=12)
         world_lines = []
         for it in selected:
-            s = it.get("s", it["s"])
-            p = it.get("p", it["p"])
-            o = it.get("o", it["o"])
-            sm = it.get("sm", it["sm"])
-            world_lines.append(f"{o}\n摘要：{sm}")
-        world_block = "\n\n".join(world_lines)
+            s = it.get("s") if isinstance(it, dict) else ""
+            o = it.get("o") if isinstance(it, dict) else ""
+            sm = it.get("sm") if isinstance(it, dict) else ""
+            # 略化输出
+            if s or o:
+                world_lines.append(f"{s}：{o}（{sm}）")
+        world_block = "\n".join(world_lines)
 
-        # —— 注入系统提示并生成 —— #
         state_block = state.as_context()
-        if event_line:
-            state_block += f"\n【本轮事件】{event_line}"
-
-        eng.set_system_prompt(
-            state_block + "\n" + stage_block + "\n\n" +
-            "【相关世界观/事实（检索）】\n" + world_block
-        )
+        eng.set_system_prompt(state_block + "\n" + stage_block + ("\n【相关事实】\n" + world_block if world_block else ""))
 
         out = eng.narrate(user)
         print(out)
 
-        # —— 判定是否推进节点（只按出边关键词） —— #
         dst = next_node_if_any(current_node, user)
         if dst and dst in nodes:
-            GameState.set_current_node(dst, db_path=db_path, save_id="default")
+            try:
+                from state import GameState as _GS
+                _GS.set_current_node(dst, db_path=db_path, save_id="default")
+            except Exception:
+                pass
             current_node = dst
+
+
+# =========================
+# 数据查看命令
+# =========================
+
+@app.command("list-facts")
+def list_facts(
+        db: str = typer.Option(None, "--db", help="数据库文件"),
+        limit: int = typer.Option(20, "--limit", min=1, help="显示条数"),
+        offset: int = typer.Option(0, "--offset", min=0, help="偏移量"),
+        like: str = typer.Option("", "--like", help="按 subject/predicate/object 进行模糊匹配"),
+):
+    """查看 facts 表（如不存在则提示）。"""
+    db_path = db or os.getenv("DB_PATH", "./db/canon.sqlite")
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    if not _table_exists(conn, "facts"):
+        print(f"ℹ️ 数据库 {db_path} 中不存在 facts 表。")
+        conn.close()
+        return
+
+    where = ""
+    params = []
+    if like:
+        where = "WHERE subject LIKE ? OR predicate LIKE ? OR object LIKE ?"
+        kw = f"%{like}%"
+        params = [kw, kw, kw]
+
+    sql = f"""
+    SELECT subject, predicate, object, COALESCE(summary, '')
+    FROM facts
+    {where}
+    LIMIT ? OFFSET ?;
+    """
+    rows = cur.execute(sql, (*params, limit, offset)).fetchall()
+    conn.close()
+
+    if not rows:
+        print("（无匹配数据）")
+        return
+
+    _print_table(rows, headers=["SUBJECT", "PREDICATE", "OBJECT", "SUMMARY"])
+
+
+@app.command("list-nodes")
+def list_nodes(
+        db: str = typer.Option(None, "--db", help="数据库文件"),
+        limit: int = typer.Option(20, "--limit", min=1, help="显示条数"),
+        offset: int = typer.Option(0, "--offset", min=0, help="偏移量"),
+        like: str = typer.Option("", "--like", help="按 id/title/summary 进行模糊匹配"),
+):
+    """查看剧情节点（plot_nodes）。"""
+    db_path = db or os.getenv("DB_PATH", "./db/canon.sqlite")
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    if not _table_exists(conn, "plot_nodes"):
+        print(f"❌ 数据库 {db_path} 中不存在 plot_nodes 表。")
+        conn.close()
+        return
+
+    where = ""
+    params = []
+    if like:
+        where = "WHERE id LIKE ? OR title LIKE ? OR summary LIKE ?"
+        kw = f"%{like}%"
+        params = [kw, kw, kw]
+
+    sql = f"""
+    SELECT id, title, summary, COALESCE(fact_tags,'')
+    FROM plot_nodes
+    {where}
+    ORDER BY id
+    LIMIT ? OFFSET ?;
+    """
+    rows = cur.execute(sql, (*params, limit, offset)).fetchall()
+    conn.close()
+
+    if not rows:
+        print("（无匹配数据）")
+        return
+
+    _print_table(rows, headers=["NODE_ID", "TITLE", "SUMMARY", "FACT_TAGS"])
+
+
+@app.command("list-edges")
+def list_edges(
+        db: str = typer.Option(None, "--db", help="数据库文件"),
+        limit: int = typer.Option(50, "--limit", min=1, help="显示条数"),
+        offset: int = typer.Option(0, "--offset", min=0, help="偏移量"),
+        src_like: str = typer.Option("", "--src-like", help="按 src 模糊匹配"),
+):
+    """查看剧情连接（plot_edges）。"""
+    db_path = db or os.getenv("DB_PATH", "./db/canon.sqlite")
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    if not _table_exists(conn, "plot_edges"):
+        print(f"❌ 数据库 {db_path} 中不存在 plot_edges 表。")
+        conn.close()
+        return
+
+    where = ""
+    params = []
+    if src_like:
+        where = "WHERE src LIKE ?"
+        params = [f"%{src_like}%"]
+
+    sql = f"""
+    SELECT src, dst, COALESCE(keywords,''), COALESCE(condition,'')
+    FROM plot_edges
+    {where}
+    ORDER BY src, dst
+    LIMIT ? OFFSET ?;
+    """
+    rows = cur.execute(sql, (*params, limit, offset)).fetchall()
+    conn.close()
+
+    if not rows:
+        print("（无匹配数据）")
+        return
+
+    _print_table(rows, headers=["SRC", "DST", "KEYWORDS", "CONDITION"])
 
 
 if __name__ == "__main__":

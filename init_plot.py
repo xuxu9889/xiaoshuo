@@ -1,7 +1,7 @@
 import sqlite3, os
 from pathlib import Path
 
-DB_PATH = os.getenv("DB_PATH", "./db/canon.sqlite")
+DB_PATH = os.getenv("DB_PATH", "./db/盗墓笔记.world.sqlite")
 
 def exec_sql(path):
     with open(path, "r", encoding="utf-8") as f:
